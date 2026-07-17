@@ -1,279 +1,198 @@
 # LT — Local Text Guide
 
-**Chat with friends over LAN or Internet.** No server needed. No accounts. Just you and your friend.
+**Chat with friends over LAN or Internet.** No server needed. No accounts.
+
+```
+lt --setup     First time setup (works any time)
+lt             Connect and chat
+lt --lan       Force LAN mode
+lt --p2p       Force P2P (Internet) mode
+lt --tor       Force Tor mode
+lt --help      Show help
+```
 
 ---
 
-## Quick Start
+## Install
 
 ```bash
-pip3 install textual pystun3 stem pyperclip --break-system-packages
-lt --setup    # First time — follow the wizard
-lt            # Connect and chat
+# One-command install:
+bash setup.sh
+
+# Or manually:
+pip install rich prompt_toolkit cryptography --break-system-packages
+pip install pystun3 stem pyperclip --break-system-packages   # optional
+chmod +x lt.py
+ln -s $(pwd)/lt.py ~/.local/bin/lt
 ```
 
 ---
 
-## Ways to Connect
+## First Time
 
-| Mode | Works | Speed | Setup |
-|------|-------|-------|-------|
-| **LAN** | Same WiFi | 🔥 Fast | Enter friend's IP |
-| **P2P** | Anywhere on Internet | ⚡ Fast | Share a password |
-| **Tor** | Anywhere, behind any firewall | 🐢 Slower | Install Tor + password |
+```bash
+lt --setup
+```
+
+It will ask:
+```
+Connection mode:     lan / p2p / tor
+Display name:        Your name
+Peer IP:             192.168.1.105   (for LAN)
+Pairing password:    secret          (for P2P/Tor)
+Port:                5050
+```
+
+Then:
+```bash
+lt    # connect and chat
+```
 
 ---
 
-## First Run (Onboarding)
-
-When you run `lt` for the first time, you'll see the setup wizard:
-
-1. **Choose mode** — LAN, P2P, or Tor
-2. **Enter display name** — How you appear to your friend
-3. **Enter details** — IP for LAN, password for P2P/Tor
-
-After setup, just run `lt` to connect.
-
----
-
-## The Chat Screen (TUI)
+## What You See
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│  LT — Local Text                         ⭘      07:15   │
-├──────────────────────────────────────────────────────────┤
-│ ┌────────────────────────────────────────────────────────┐ │
-│ │ 14:00 Kali: Hey! This UI is sick!                     │ │
-│ │ 14:01 You: Right? P2P is so fast                      │ │
-│ │ 📁 Kali sent: photo.jpg (2.4 MB)                      │ │
-│ │                                                        │ │
-│ │                                                        │ │
-│ ├────────────────────────────────────────────────────────┤ │
-│ │ Type message...                          [Send] [📎]  │ │
-├──────────────────────────────────────────────────────────┤ │
-│ Mode: P2P | Ctrl+Q:Quit /cmd Ctrl+F:File Ctrl+S:Settings │
-└──────────────────────────────────────────────────────────┘
+╭──────────────────────────────────────────────────────────────╮
+│ ✓ Connected • Mode: LAN • Type /help for commands, /exit    │
+╰──────────────────────────────────────────────────────────────╯
+
+ Kali (14:00): Hey! What's up?
+ You (14:01): Nothing much, testing LT!
+
+You: █
 ```
 
-### Keyboard Shortcuts
-
-| Key | Action |
-|-----|--------|
-| `Ctrl+Q` | Quit |
-| `Ctrl+F` | Send file |
-| `Ctrl+V` | Send clipboard |
-| `Ctrl+S` | Open settings |
-| `Ctrl+L` | Clear chat |
-| `Ctrl+N` | Connect to new peer |
-| `/cmd` | Type any command below |
+- **Green** = Peer's messages
+- **Blue** = Your messages
+- **Yellow** = System status
+- ✓ / ✗ / ⟳ = Connection indicators
 
 ---
 
 ## Commands
 
-Type any of these in the chat input and press Enter:
-
 | Command | What it does |
 |---------|-------------|
-| `/exit` | Quit the chat |
+| `/exit` | Quit |
 | `/clear` | Clear screen |
 | `/ping` | Check connection |
 | `/time` | Show current time |
-| `/clip` | Send your clipboard to friend |
-| `/file photo.jpg` | Send a file |
-| `/setting` | Open settings panel |
+| `/clip` | Send clipboard to friend |
+| `/file <path>` | Send a file |
+| `/setting` | Open settings menu |
 | `/connect` | Connect to a new peer |
 | `/help` | Show all commands |
 
 ---
 
+## 3 Connection Modes
+
+### LAN — Same WiFi
+```
+Both run:    lt
+No config needed after --setup.
+Auto-connects by trying to connect + listen.
+```
+
+### P2P — Internet (Direct, Fastest)
+```
+1. lt --setup → choose p2p → enter password
+2. lt --p2p
+3. Shows: Your public address: 203.0.113.5:54321
+4. Share that with your friend
+5. Enter friend's address when prompted
+6. Connected! Direct P2P encrypted chat.
+```
+
+### Tor — Internet (Any Firewall)
+```
+1. Install Tor: sudo apt install tor
+2. lt --setup → choose tor → enter password
+3. lt --tor
+4. Shows: Your .onion: abcdef.onion:5050
+5. Share with friend, enter theirs
+6. Connected over Tor.
+```
+
+---
+
 ## File Transfer
 
+```bash
+You:   /file photo.jpg
+       Sending: photo.jpg (2.4 MB)
+       [████████████████░░░░] 80%
+
+Friend:
+       📁 Kali wants to send: photo.jpg (2.4 MB)
+       Accept? (y/n): y
+       ✓ Received: photo.jpg → ~/Downloads/LT/photo.jpg
 ```
-You:                    Friend:
-  /file photo.jpg         📁 Incoming file:
-                          Kali wants to send:
-                          photo.jpg (2.4 MB)
-
-                          [Accept]  [Reject]
-
-  [████████░░] 55%        → Accepted
-  1.2 MB/s                [████████████████] 100%
-                          ✓ Saved to ~/Downloads/LT/
-```
-
-- Files are sent in chunks with progress bar
-- Saved to `~/Downloads/LT/` by default
-- Change download folder in Settings
 
 ## Clipboard
 
-```
-You type /clip:
-  → Your clipboard content is sent to friend
-  → Friend sees: 📋 Kali sent clipboard
-  → Auto-copied to their clipboard
-  → Friend presses Ctrl+V anywhere
+```bash
+You:   /clip
+       ✓ Clipboard sent (245 chars)
+
+Friend:
+       📋 Kali sent clipboard
+       ✓ Copied to your clipboard
 ```
 
 ---
 
 ## Offline Messages
 
-If your friend is offline when you send a message:
+If friend is offline when you send:
 
 ```
-📨 Pending (2 messages)
-  → Saved for later delivery
+📨 Saved for later (friend offline)
 ```
 
 When friend reconnects:
 
 ```
-✅ Kali-PC connected
-📨 Delivering 2 pending messages... [████████████████] 100%
-─── 2 messages delivered ───
-You (14:00): Hey! How are you?
-You (14:01): sent photo.jpg (2.4 MB)
+📨 Delivered 2 pending message(s)
 ```
 
----
-
-## Settings (Ctrl+S or /setting)
-
-```
-╭─ Settings ─────────────────────────────────────────────╮
-│                                                        │
-│  Display Name:    [Kali                      ]         │
-│  Theme:           ● Dark  ○ Light                     │
-│  Show Timestamps: [✓]                                   │
-│  Auto-Reconnect:  [✓]                                   │
-│  Auto-Accept Files: [ ]                                 │
-│  Download Dir:    [~/Downloads/LT          ]           │
-│                                                        │
-│  [Save]  [Reset]  [Cancel]                              │
-╰────────────────────────────────────────────────────────╯
-```
-
----
-
-## P2P Mode (Internet — Direct)
-
-**Fastest way to chat over Internet.** Uses STUN to discover your public IP and UDP hole punching for a direct connection.
-
-```
-lt --setup          → Choose P2P → enter password
-lt --p2p            → Connect
-
-Your public address: 203.0.113.5:54321
-Share this with your friend.
-
-Enter friend's address: 203.0.113.10:54321
-→ Connected! 🔒 Encrypted
-```
-
-### Why P2P is fast
-
-```
-P2P:     You ────────────────────────── Friend    1 hop → 10-50ms
-Tor:     You ─► Guard ─► Middle ─► Exit ─► Friend  3 hops → 200ms-2s
-```
-
----
-
-## Tor Mode (Internet — Any Firewall)
-
-**Works everywhere.** Even behind strict firewalls or corporate networks. Requires Tor installed.
-
-```bash
-sudo apt install tor       # Install Tor
-lt --setup                 → Choose Tor → enter password
-lt --tor                   → Connect
-
-Your .onion: abcdef123456.onion:5050
-Share this with your friend.
-```
-
----
-
-## LAN Mode (Same WiFi)
-
-No setup needed after the first time.
-
-```bash
-lt --setup  → Choose LAN → enter friend's IP
-lt          → Connect
-```
-
-Both devices must be on the same network.
+Messages are saved to `~/.config/lt/offline/` and auto-sent on reconnect.
 
 ---
 
 ## Encryption
 
-All messages are **encrypted end-to-end** with AES-256-GCM.
-
-- Your pairing password is used to derive the encryption key
-- Messages are encrypted before sending
-- The Tor/relay/peer cannot read your messages
-- 🔒 Lock icon shows encryption is active
+Messages are **encrypted end-to-end** with AES-256-GCM when using P2P or Tor mode with a pairing password. The LAN mode is unencrypted (local network only).
 
 ---
 
-## File Structure
+## Files
 
-```
-~/.local/bin/lt              → Command (symlink)
-~/.config/lt/settings.json   → Your settings
-~/.config/lt/offline/        → Pending messages
-~/Downloads/LT/              → Received files
-```
+| File | Purpose |
+|------|---------|
+| `lt.py` | The main script (~600 lines) |
+| `setup.sh` | Installer script |
+| `GUIDE.md` | This guide |
+| `~/.config/lt/settings.json` | Config file |
+| `~/.config/lt/offline/` | Pending messages |
+| `~/Downloads/LT/` | Received files |
 
 ---
 
 ## Troubleshooting
 
-**App doesn't start**
-```bash
-pip3 install textual pystun3 stem pyperclip --break-system-packages
-```
+**lt --setup doesn't run?**
+→ It always runs. Just type `lt --setup` any time.
 
-**Can't connect over P2P**
-- Make sure both have the same pairing password
-- Check that STUN server is accessible (default: `stun.l.google.com:19302`)
-- Some NAT types (Symmetric) don't support hole punching → try Tor mode
+**Can't see your own messages?**
+→ They appear right after you type: `You (HH:MM): message`
 
-**Can't connect over Tor**
-- Run `sudo apt install tor` and make sure Tor is running
-- Check Tor SOCKS port (default: 9050)
-- Check Tor Control port (default: 9051)
+**No connection indicator?**
+→ You'll see: ✓ Connected / ✗ Disconnected / ⟳ Reconnecting...
 
-**Can't connect over LAN**
-- Both devices must be on the same WiFi/LAN
-- Check that you entered the correct IP
-- Try disabling firewall or allowing port 5050
+**Can't connect over P2P?**
+→ Try Tor mode instead. Some NAT types don't support P2P hole punching.
 
-**Messages not showing**
-- Wait for auto-reconnect
-- Type `/ping` to check connection
-- Run `lt` again
-
----
-
-## Coming in Future
-
-| Feature | Status |
-|---------|--------|
-| ~~Phase 1 (LAN Chat)~~ | ✅ Done |
-| ~~TUI (Graphical Terminal)~~ | ✅ Done |
-| ~~P2P over Internet~~ | ✅ Done |
-| ~~Tor Mode~~ | ✅ Done |
-| ~~File Transfer~~ | ✅ Done |
-| ~~Clipboard Share~~ | ✅ Done |
-| ~~Offline Messages~~ | ✅ Done |
-| ~~Settings Panel~~ | ✅ Done |
-| Auto Discovery (no IP needed) | 🔜 Coming |
-| Multiple Devices | 🔜 Coming |
-| Broadcast Message | 🔜 Coming |
-| Notification Sound | 🔜 Coming |
-| Drag & Drop Files | 🔜 Coming |
+**Can't connect over Tor?**
+→ Run `sudo apt install tor && sudo systemctl start tor`
