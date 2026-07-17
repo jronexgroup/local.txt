@@ -26,6 +26,7 @@ from pathlib import Path
 try:
     from prompt_toolkit import PromptSession
     from prompt_toolkit import print_formatted_text as pt_print
+    from prompt_toolkit.completion import WordCompleter
     from rich.console import Console
     from rich.progress import Progress, BarColumn, TextColumn
 except ImportError:
@@ -51,19 +52,16 @@ CONFIG_FILE = CONFIG_DIR / "settings.json"
 OFFLINE_DIR = CONFIG_DIR / "offline"
 
 console = Console()
-session = PromptSession()
+CMD_COMPLETER = WordCompleter(["/exit", "/clear", "/ping", "/time", "/clip", "/file", "/help", "/setting"])
+session = PromptSession(completer=CMD_COMPLETER)
 
 
 # ─── Config ───────────────────────────────────────────────────────
 
 DEFAULTS = {
-    "mode": "p2p",
     "port": 5050,
-    "pair_password": "",
     "display_name": platform.node() or "Device",
-    "stun_server": "stun.l.google.com:19302",
     "download_dir": str(Path.home() / "Downloads" / "LT"),
-    "last_code": "",
 }
 
 
@@ -89,7 +87,7 @@ def save(**kw):
 
 def is_cfg():
     c = load()
-    return bool(c["pair_password"]) or (c["mode"] == "lan" and bool(load().get("peer_ip", "")))
+    return bool(c.get("display_name", ""))
 
 
 # ─── Crypto ───────────────────────────────────────────────────────
@@ -143,75 +141,88 @@ def code6():
 
 def setup_wizard():
     console.print("\n[bold cyan]== LT Setup ==[/]\n")
-    m = console.input("[bold]Mode[/] ([green]lan[/]/[yellow]p2p[/], Enter=p2p): ").strip().lower() or "p2p"
-    if m not in ("lan", "p2p"):
-        m = "p2p"
-    nm = console.input(f"[bold]Name[/] (Enter={DEFAULTS['display_name']}): ").strip() or DEFAULTS['display_name']
-    cfg = {"mode": m, "display_name": nm}
+    nm = console.input(f"Your display name (Enter={DEFAULTS['display_name']}): ").strip() or DEFAULTS['display_name']
+    save(display_name=nm)
+    console.print(f"\n[green]Saved! Run: lt[/]\n")
 
-    if m == "lan":
-        ip = console.input("[bold]Peer IP[/]: ").strip()
-        p = console.input("[bold]Port[/] (5050): ").strip() or "5050"
-        cfg.update({"peer_ip": ip, "port": int(p)})
-    else:
-        pw = console.input("[bold]Password[/] (min 4 chars): ", password=True).strip()
-        if len(pw) < 4:
-            console.print("[red]Need at least 4 chars[/]")
-            return setup_wizard()
-        pw2 = console.input("[bold]Confirm[/]: ", password=True).strip()
-        if pw != pw2:
-            console.print("[red]Don't match[/]")
-            return setup_wizard()
-        p = console.input("[bold]Port[/] (5050): ").strip() or "5050"
-        cfg.update({"pair_password": pw, "port": int(p)})
 
-    save(**cfg)
-    console.print(f"\n[green]Saved. Run: lt[/]\n")
+# ─── Friends History ─────────────────────────────────────────────
+
+FRIENDS_FILE = CONFIG_DIR / "friends.json"
+
+def load_friends():
+    if not FRIENDS_FILE.exists(): return []
+    try: return json.loads(FRIENDS_FILE.read_text())
+    except: return []
+
+def save_friend(name, ip, port, mode):
+    fr = load_friends()
+    fr = [f for f in fr if not (f.get("name")==name and f.get("ip")==ip and f.get("mode")==mode)]
+    fr.append({"name":name,"ip":ip,"port":port,"mode":mode,"last_seen":datetime.now().isoformat()})
+    fr = sorted(fr, key=lambda x: x["last_seen"], reverse=True)[:10]
+    FRIENDS_FILE.write_text(json.dumps(fr, indent=2, ensure_ascii=False))
+
+def pick_friend(mode):
+    fr = [f for f in load_friends() if f["mode"]==mode]
+    if not fr: return None
+    console.print(f"\n[bold]Saved {mode.upper()} friends:[/]")
+    for i, f in enumerate(fr, 1):
+        ts = f["last_seen"][:10] if len(f["last_seen"])>=10 else f["last_seen"]
+        console.print(f"  {i}. [green]{f['name']}[/] ({f['ip']}:{f['port']}) — [dim]{ts}[/]")
+    console.print(f"  {len(fr)+1}. [yellow]New connection...[/]")
+    ch = console.input("\nChoose: ").strip()
+    if ch.isdigit() and 1 <= int(ch) <= len(fr):
+        return fr[int(ch)-1]
+    return None
 
 
 # ─── Transport (LAN) ─────────────────────────────────────────────
 
 class LAN:
-    def __init__(self, host, port):
-        self.host, self.port = host, port
+    def __init__(self, port):
+        self.port = port
         self.sock = None
         self.buf = ""
         self.running = False
         self.on_msg = None
         self.on_st = None
+        self.peer_host = None
 
-    def connect(self):
-        # Try connecting to peer first
-        for i in range(10):
-            try:
-                s = socket.socket(); s.settimeout(2)
-                s.connect((self.host, self.port)); s.settimeout(None)
-                self.sock = s
-                self.running = True
-                if self.on_st: self.on_st("connected")
-                threading.Thread(target=self._r, daemon=True).start()
-                return True
-            except (ConnectionRefusedError, socket.timeout, OSError):
-                if i == 0 and self.on_st:
-                    self.on_st(f"connecting to {self.host}:{self.port}")
-                time.sleep(1)
-
-        # Failed to connect — start listening instead
-        if self.on_st: self.on_st("waiting for incoming connection")
+    def listen(self):
+        if self.on_st: self.on_st("waiting for incoming connection...")
         try:
             sv = socket.socket(); sv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sv.bind(("0.0.0.0", self.port)); sv.listen(1); sv.settimeout(None)
-            sv.settimeout(10)
+            sv.settimeout(60)
             conn, addr = sv.accept()
-            self.sock = conn
+            self.sock = conn; self.peer_host = addr[0]
             self.running = True
             if self.on_st: self.on_st("connected")
             threading.Thread(target=self._r, daemon=True).start()
-            sv.close()
-            return True
+            sv.close(); return True
+        except socket.timeout:
+            if self.on_st: self.on_st("timed out waiting for connection")
+            sv.close(); return False
         except Exception as e:
             if self.on_st: self.on_st(f"failed: {e}")
             return False
+
+    def connect(self, host):
+        self.peer_host = host
+        for i in range(10):
+            try:
+                s = socket.socket(); s.settimeout(3)
+                s.connect((host, self.port)); s.settimeout(None)
+                self.sock = s; self.running = True
+                if self.on_st: self.on_st("connected")
+                threading.Thread(target=self._r, daemon=True).start()
+                return True
+            except:
+                if i == 0 and self.on_st:
+                    self.on_st(f"connecting to {host}:{self.port}")
+                time.sleep(1)
+        if self.on_st: self.on_st("connection failed")
+        return False
 
     def _r(self):
         while self.running:
@@ -225,22 +236,21 @@ class LAN:
             except:
                 if self.on_st: self.on_st("disconnected")
                 if not self.running: break
+                if not self.peer_host: break
                 if self.on_st: self.on_st("reconnecting")
                 for _ in range(30):
                     if not self.running: return
                     try:
                         s = socket.socket(); s.settimeout(3)
-                        s.connect((self.host, self.port)); s.settimeout(None)
-                        self.sock = s
+                        s.connect((self.peer_host, self.port)); s.settimeout(None)
+                        self.sock = s; self.buf = ""
                         if self.on_st: self.on_st("connected")
-                        self.buf = ""
                         break
                     except: time.sleep(2)
 
     def send(self, d):
         if not self.sock: return False
-        try:
-            self.sock.sendall(d.encode()); return True
+        try: self.sock.sendall(d.encode()); return True
         except: return False
 
     def close(self):
@@ -497,8 +507,9 @@ class Chat:
         self.tp = None
         self.ok = False
         self.cfg = load()
-        self._pw = self.cfg.get("pair_password", "")
+        self._pw = ""
         self._nm = self.cfg.get("display_name", "")
+        self._mode = ""
 
     def _st(self, text):
         if text == "connected":
@@ -517,10 +528,9 @@ class Chat:
         d = msg.get("data","")
         s = msg.get("sender","Peer")
         tm = msg.get("time", ts())
-        pw = self.cfg.get("pair_password","")
 
-        # decrypt
-        if pw and self.cfg["mode"] != "lan" and t not in ("ping","pong","status"):
+        pw = self._pw
+        if pw and self._mode != "lan" and t not in ("ping","pong","status"):
             try:
                 inner = json.loads(dec(pw, d))
                 t = inner.get("type", t)
@@ -572,54 +582,118 @@ class Chat:
 
     def start(self):
         self.cfg = load()
-        m = self.cfg["mode"]
-        pw = self.cfg["pair_password"]
+        self._nm = self.cfg.get("display_name", "")
         port = self.cfg.get("port", 5050)
 
-        if m == "lan":
-            self.tp = LAN(self.cfg["peer_ip"], port)
+        # If no mode flag passed, ask
+        if not self._mode:
+            console.print("\n[bold]Choose mode:[/]")
+            console.print("  1. [green]LAN[/] (same network)")
+            console.print("  2. [yellow]P2P[/] (internet)")
+            ch = console.input("> ").strip()
+            self._mode = "p2p" if ch == "2" else "lan"
+
+        # Show saved friends for this mode, try auto-connect
+        friend = pick_friend(self._mode)
+        if friend:
+            return self._connect_friend(friend, port)
+
+        return self._new_connection(port)
+
+    def _connect_friend(self, friend, port):
+        ip = friend["ip"]
+        if self._mode == "lan":
+            self.tp = LAN(port)
             self.tp.on_msg = self._incoming
             self.tp.on_st = self._st
-            return self.tp.connect()
+            ok = self.tp.connect(ip)
+        else:
+            pw = console.input("Password for encryption: ", password=True).strip()
+            self._pw = pw
+            self.tp = P2P(pw, port)
+            self.tp.on_msg = self._incoming
+            self.tp.on_st = self._st
+            ok = self.tp.join(ip, friend.get("port", port))
+        if ok:
+            save_friend(friend["name"], ip, port, self._mode)
+        return ok
 
-        # P2P mode
+    def _new_connection(self, port):
+        if self._mode == "lan":
+            return self._lan_new(port)
+        return self._p2p_new(port)
+
+    def _lan_new(self, port):
+        console.print("\n[bold]LAN mode[/]")
+        console.print("  1. [green]Create[/] (wait for friend)")
+        console.print("  2. [yellow]Connect[/] (enter friend's IP)")
+        ch = console.input("> ").strip()
+
+        self.tp = LAN(port)
+        self.tp.on_msg = self._incoming
+        self.tp.on_st = self._st
+
+        if ch == "2":
+            host = console.input("Friend's IP: ").strip()
+            ok = self.tp.connect(host)
+            if ok:
+                nm = console.input("Friend's name: ").strip() or host
+                save_friend(nm, host, port, "lan")
+            return ok
+        else:
+            ips = get_ips()
+            console.print(f"\n  Your IP: [bold]{ips[0] if ips else '?'}[/]")
+            console.print(f"  Port: [bold]{port}[/]")
+            console.print(f"  [yellow]Waiting for friend to connect...[/]")
+            ok = self.tp.listen()
+            if ok:
+                nm = console.input("Friend's name: ").strip() or self.tp.peer_host
+                save_friend(nm, self.tp.peer_host, port, "lan")
+            return ok
+
+    def _p2p_new(self, port):
+        console.print("\n[bold]P2P mode (over internet)[/]")
+        console.print("  1. [green]Create[/] (you wait for friend)")
+        console.print("  2. [yellow]Join[/] (connect to friend)")
+        ch = console.input("> ").strip()
+
+        pw = console.input("Password for encryption: ", password=True).strip()
+        self._pw = pw
+
         self.tp = P2P(pw, port)
         self.tp.on_msg = self._incoming
         self.tp.on_st = self._st
 
-        console.print("\n[bold]P2P Mode[/]")
-        console.print("1. [green]Create[/] session (you wait for friend)")
-        console.print("2. [yellow]Join[/] session (connect to friend)")
-        ch = console.input("\nChoose [1/2]: ").strip()
-
         if ch == "2":
-            host = console.input("Friend's IP: ").strip()
-            p = console.input("Port: ").strip() or str(port)
+            addr = console.input("Friend's IP:Port (e.g. 1.2.3.4:5050): ").strip()
+            if ":" in addr:
+                host, p = addr.rsplit(":", 1)
+            else:
+                host, p = addr, str(port)
             console.print("[yellow]Connecting...[/]")
             ok = self.tp.join(host, p)
             if ok:
-                console.print("[green]✓ Connected![/]")
+                nm = console.input("Friend's name: ").strip() or host
+                save_friend(nm, host, int(p), "p2p")
             return ok
         else:
-            code = code6()
-            save(last_code=code)
             ips = get_ips()
-            console.print(f"\n  [bold green]Your session code: {code}[/]")
+            console.print(f"\n  Tell your friend this address:")
             stun_ip = self.tp.public_ip or ips[0] if ips else "?"
             stun_port = self.tp.public_port or port
-            console.print(f"  [bold]Give this to your friend:[/] [yellow]{stun_ip}:{stun_port}[/]")
-            console.print(f"  [bold]Local IP:[/] {ips[0] if ips else '?'}   [bold]Port:[/] {port}")
-            console.print(f"  They run: [bold]lt → 2 → enter your IP:Port[/]")
+            console.print(f"  [bold yellow]{stun_ip}:{stun_port}[/]")
+            console.print(f"  (local: [dim]{ips[0] if ips else '?'}:{port}[/])")
             console.print(f"\n  [yellow]Waiting for friend to connect...[/]")
             ok = self.tp.create()
             if ok:
-                console.print("[green]✓ Connected![/]")
+                nm = console.input("Friend's name: ").strip() or "Peer"
+                save_friend(nm, stun_ip, stun_port, "p2p")
             return ok
 
     def send_text(self, text):
         pw = self._pw
         nm = self._nm
-        if pw and self.cfg["mode"] != "lan":
+        if pw and self._mode != "lan":
             inner = json.dumps({"type":"text","data":text,"sender":nm})
             self.tp.send(pk({"type":"text","data":enc(pw,inner)}))
         else:
@@ -636,7 +710,7 @@ class Chat:
             return
         pw = self._pw
         nm = self._nm
-        if pw and self.cfg["mode"] != "lan":
+        if pw and self._mode != "lan":
             inner = json.dumps({"type":"clip","data":t,"sender":nm})
             self.tp.send(pk({"type":"clip","data":enc(pw,inner)}))
         else:
@@ -652,7 +726,7 @@ class Chat:
         pw = self._pw
         snd = self._nm
 
-        if pw and self.cfg["mode"] != "lan":
+        if pw and self._mode != "lan":
             inner = json.dumps({"type":"file_meta","data":{"name":nm,"size":sz,"file_id":fid},"sender":snd})
             self.tp.send(pk({"type":"file_meta","data":enc(pw,inner)}))
         else:
@@ -665,7 +739,7 @@ class Chat:
             with open(p,"rb") as f:
                 for seq in range(total):
                     b64 = base64.b64encode(f.read(CHUNK)).decode()
-                    if pw and self.cfg["mode"] != "lan":
+                    if pw and self._mode != "lan":
                         inner = json.dumps({"type":"file_chunk","data":{"file_id":fid,"seq":seq,"total":total,"data":b64},"sender":snd})
                         self.tp.send(pk({"type":"file_chunk","data":enc(pw,inner)}))
                     else:
@@ -681,18 +755,17 @@ class Chat:
 # ─── Main ─────────────────────────────────────────────────────────
 
 def run(mode=None):
-    cfg = load()
-    if mode:
-        save(mode=mode)
-        cfg = load()
-
     chat = Chat()
-    console.print("\n[bold cyan]== LT ==[/]")
+    if mode:
+        chat._mode = mode
+
     ok = chat.start()
     if not ok:
         console.print("[red]connection failed[/]")
         sys.exit(1)
-    console.print("\n[bold green]--- Connected ---[/]")
+
+    console.clear()
+    console.print("[bold cyan]== LT Chat ==[/]")
     console.print("[dim]/help for commands, /exit to quit[/]\n")
 
     try:
@@ -769,8 +842,8 @@ def menu():
 def main():
     ap = argparse.ArgumentParser(prog="lt", description="LT — Local Text")
     ap.add_argument("--setup", action="store_true", help="Configure")
-    ap.add_argument("--lan", action="store_true", help="LAN mode")
-    ap.add_argument("--p2p", action="store_true", help="P2P mode")
+    ap.add_argument("--lan", action="store_true", help="LAN mode (same network)")
+    ap.add_argument("--p2p", action="store_true", help="P2P mode (over internet)")
     args = ap.parse_args()
 
     if args.setup:
@@ -781,10 +854,9 @@ def main():
         console.print("[yellow]Run: lt --setup[/]")
         sys.exit(1)
 
-    mode = None
-    if args.lan: mode = "lan"
-    elif args.p2p: mode = "p2p"
-    run(mode)
+    if args.lan: run("lan")
+    elif args.p2p: run("p2p")
+    else: run()  # no flag → interactive mode select
 
 
 if __name__ == "__main__":
