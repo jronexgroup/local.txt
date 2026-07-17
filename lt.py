@@ -15,6 +15,8 @@ import platform
 import random
 import socket
 import string
+import struct
+import subprocess
 import sys
 import threading
 import time
@@ -248,94 +250,233 @@ class LAN:
             except: pass
 
 
-# ─── Transport (P2P TCP) ─────────────────────────────────────────
+# ─── Helper: IPs ─────────────────────────────────────────────
+
+def get_ips():
+    """Return list of local IP addresses."""
+    ips = set()
+    # Try hostname
+    try:
+        ips.add(socket.gethostbyname(socket.gethostname()))
+    except: pass
+    # Try all interfaces
+    try:
+        import subprocess
+        r = subprocess.run(["hostname", "-I"], capture_output=True, text=True)
+        if r.returncode == 0:
+            for ip in r.stdout.strip().split():
+                if ip: ips.add(ip)
+    except: pass
+    # Fallback
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ips.add(s.getsockname()[0])
+        s.close()
+    except: pass
+    # Remove loopback
+    ips = sorted(ip for ip in ips if not ip.startswith("127."))
+    return ips or ["127.0.0.1"]
+
+
+# ─── Transport (P2P UDP + Hole Punching) ─────────────────────────
 
 class P2P:
+    """UDP-based P2P with STUN hole punching. Works behind NAT, no port forwarding needed."""
+
+    STUN_HOST = "stun.l.google.com"
+    STUN_PORT = 19302
+
     def __init__(self, password, port):
         self.password = password
         self.port = port
         self.sock = None
-        self.buf = ""
         self.running = False
         self.on_msg = None
         self.on_st = None
-        self._server = None
-        self.mode = None  # "create" or "join"
+        self.peer_addr = None
+        self.public_ip = None
+        self.public_port = None
+        self._seq = 0
+        self._acks = {}
+        self._lock = threading.Lock()
+
+    # ── Minimal STUN (stdlib only) ─────────────────────────────
+
+    @staticmethod
+    def _stun_lookup(host=STUN_HOST, port=STUN_PORT, timeout=4):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.settimeout(timeout)
+            tid = os.urandom(12)
+            magic = 0x2112A442
+            req = struct.pack("!HH", 0x0001, 0) + struct.pack("!I", magic) + tid
+            s.sendto(req, (host, port))
+            res, _ = s.recvfrom(1024)
+            s.close()
+            if len(res) < 20: return None
+            cookie = struct.unpack("!I", res[4:8])[0]
+            if cookie != magic: return None
+            pos = 20
+            while pos + 4 <= len(res):
+                atype, alen = struct.unpack("!HH", res[pos:pos+4])
+                pos += 4
+                if atype == 0x0020 and alen >= 8:  # XOR-MAPPED-ADDRESS
+                    family = res[pos+1]
+                    pval = struct.unpack("!H", res[pos+2:pos+4])[0] ^ (magic >> 16)
+                    if family == 0x01:
+                        ipb = bytes(a ^ b for a, b in zip(res[pos+4:pos+8], struct.pack("!I", magic)))
+                        return socket.inet_ntoa(ipb), pval
+                elif atype == 0x0001 and alen >= 8:  # MAPPED-ADDRESS
+                    family = res[pos+1]
+                    pval = struct.unpack("!H", res[pos+2:pos+4])[0]
+                    if family == 0x01:
+                        return socket.inet_ntoa(res[pos+4:pos+8]), pval
+                pos += alen
+        except: pass
+        return None
+
+    def _get_public(self):
+        r = self._stun_lookup(self.STUN_HOST, self.STUN_PORT)
+        if r:
+            self.public_ip, self.public_port = r
+
+    def _local_ip(self):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]; s.close(); return ip
+        except: return "?"
+
+    # ── Socket ───────────────────────────────────────────────────
+
+    def _make_sock(self):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind(("0.0.0.0", self.port))
+        self.port = self.sock.getsockname()[1]
+        self.sock.settimeout(3)
+
+    # ── Create (wait for peer) ───────────────────────────────────
 
     def create(self):
-        """Start as server, wait for connection."""
-        self.mode = "create"
-        self._server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            self._server.bind(("0.0.0.0", self.port))
-            self._server.listen(1)
-            self._server.settimeout(None)
-        except OSError:
-            if self.on_st: self.on_st(f"Port {self.port} in use")
-            return False
-        if self.on_st: self.on_st(f"listening on port {self.port}")
+        self._make_sock()
+        self._get_public()
+        pub = f"{self.public_ip}:{self.public_port}" if self.public_ip else "?"
+        loc = self._local_ip()
+        if self.on_st: self.on_st(f"Your public: {pub}  (local: {loc}:{self.port})")
         self.running = True
-        threading.Thread(target=self._wait_peer, daemon=True).start()
-        return True
 
-    def _wait_peer(self):
-        try:
-            conn, addr = self._server.accept()
-            self.sock = conn
-            if self.on_st: self.on_st(f"connected from {addr[0]}:{addr[1]}")
-            threading.Thread(target=self._r, daemon=True).start()
-        except Exception as e:
-            if self.on_st: self.on_st(f"error: {e}")
-
-    def join(self, host, port):
-        """Connect as client to peer."""
-        self.mode = "join"
-        self._server = None
-        for _ in range(10):
+        while self.running and not self.peer_addr:
             try:
-                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                s.settimeout(5)
-                s.connect((host, int(port)))
-                s.settimeout(None)
-                self.sock = s
-                self.running = True
-                if self.on_st: self.on_st("connected")
-                threading.Thread(target=self._r, daemon=True).start()
-                return True
-            except (ConnectionRefusedError, socket.timeout, OSError):
-                time.sleep(1)
-        if self.on_st: self.on_st("connection failed")
+                data, addr = self.sock.recvfrom(65536)
+                if data == b"PUNCH":
+                    self.peer_addr = addr
+                    self.sock.sendto(b"PUNCH_ACK", addr)
+                    self.sock.settimeout(None); self.sock.settimeout(3)
+                    threading.Thread(target=self._recv, daemon=True).start()
+                    if self.on_st: self.on_st("connected")
+                    return True
+            except socket.timeout: continue
+            except OSError: break
         return False
 
-    def _r(self):
-        while self.running:
-            try:
-                d = self.sock.recv(65536)
-                if not d: raise ConnectionResetError
-                self.buf += d.decode()
-                while "\n" in self.buf:
-                    l, self.buf = self.buf.split("\n", 1)
-                    if self.on_msg: self.on_msg(l)
-            except:
-                if self.on_st: self.on_st("disconnected")
-                if self.running and self.on_st:
-                    self.on_st("reconnecting")
-                break
+    # ── Join (connect to peer) ──────────────────────────────────
 
-    def send(self, d):
-        if not self.sock: return False
-        try:
-            self.sock.sendall(d.encode()); return True
-        except: return False
+    def join(self, host, port):
+        self._make_sock()
+        self._get_public()
+        self.peer_addr = (host, int(port))
+        pub = f"{self.public_ip}:{self.public_port}" if self.public_ip else "?"
+        if self.on_st: self.on_st(f"Your public: {pub}")
+        self.running = True
+
+        for _ in range(5):
+            try: self.sock.sendto(b"PUNCH", self.peer_addr)
+            except: pass
+            time.sleep(0.3)
+
+        for _ in range(10):
+            try:
+                data, addr = self.sock.recvfrom(65536)
+                if data == b"PUNCH_ACK":
+                    self.peer_addr = addr
+                    self.sock.settimeout(None); self.sock.settimeout(3)
+                    threading.Thread(target=self._recv, daemon=True).start()
+                    if self.on_st: self.on_st("connected")
+                    return True
+            except socket.timeout: continue
+            except OSError: break
+
+        if self.on_st: self.on_st("connection failed (peer unreachable)")
+        return False
+
+    # ── Receive (runs in bg thread) ─────────────────────────────
+
+    def _recv(self):
+        while self.running:
+            try: data, addr = self.sock.recvfrom(65536)
+            except socket.timeout: continue
+            except OSError: break
+
+            # ACK for sent message → signal send()
+            if data.startswith(b"ACK"):
+                sseq = int.from_bytes(data[3:7], "big") if len(data) >= 7 else 0
+                ev = self._acks.pop(sseq, None)
+                if ev: ev.set()
+                continue
+
+            # Hole punch re-establish
+            if data == b"PUNCH":
+                self.peer_addr = addr
+                try: self.sock.sendto(b"PUNCH_ACK", addr)
+                except: pass
+                continue
+            if data == b"PUNCH_ACK":
+                self.peer_addr = addr
+                continue
+
+            # Reliable data message
+            if data.startswith(b"DATA"):
+                sseq = int.from_bytes(data[4:8], "big") if len(data) >= 8 else 0
+                try: self.sock.sendto(b"ACK" + sseq.to_bytes(4, "big"), addr)
+                except: pass
+                payload = data[8:]
+                if self.on_msg: self.on_msg(payload.decode())
+                continue
+
+            # Raw (fallback)
+            if self.on_msg: self.on_msg(data.decode())
+
+    # ── Send (reliable with retry + ACK) ────────────────────────
+
+    def send(self, data):
+        if not self.sock or not self.peer_addr:
+            return False
+        payload = data.encode()
+        with self._lock:
+            seq = self._seq
+            self._seq += 1
+        ev = threading.Event()
+        self._acks[seq] = ev
+        packet = b"DATA" + seq.to_bytes(4, "big") + payload
+
+        for _ in range(3):
+            try:
+                self.sock.sendto(packet, self.peer_addr)
+                if ev.wait(timeout=2):
+                    return True
+            except OSError:
+                break
+        self._acks.pop(seq, None)
+        return False
+
+    # ── Close ──────────────────────────────────────────────────
 
     def close(self):
         self.running = False
         if self.sock:
             try: self.sock.close()
-            except: pass
-        if self._server:
-            try: self._server.close()
             except: pass
 
 
@@ -356,6 +497,8 @@ class Chat:
         self.tp = None
         self.ok = False
         self.cfg = load()
+        self._pw = self.cfg.get("pair_password", "")
+        self._nm = self.cfg.get("display_name", "")
 
     def _st(self, text):
         if text == "connected":
@@ -450,23 +593,32 @@ class Chat:
         ch = console.input("\nChoose [1/2]: ").strip()
 
         if ch == "2":
-            # Join
             host = console.input("Friend's IP: ").strip()
             p = console.input("Port: ").strip() or str(port)
-            return self.tp.join(host, p)
+            console.print("[yellow]Connecting...[/]")
+            ok = self.tp.join(host, p)
+            if ok:
+                console.print("[green]✓ Connected![/]")
+            return ok
         else:
-            # Create
             code = code6()
             save(last_code=code)
+            ips = get_ips()
             console.print(f"\n  [bold green]Your session code: {code}[/]")
-            console.print("  Share this with your friend.\n")
+            stun_ip = self.tp.public_ip or ips[0] if ips else "?"
+            stun_port = self.tp.public_port or port
+            console.print(f"  [bold]Give this to your friend:[/] [yellow]{stun_ip}:{stun_port}[/]")
+            console.print(f"  [bold]Local IP:[/] {ips[0] if ips else '?'}   [bold]Port:[/] {port}")
+            console.print(f"  They run: [bold]lt → 2 → enter your IP:Port[/]")
+            console.print(f"\n  [yellow]Waiting for friend to connect...[/]")
             ok = self.tp.create()
+            if ok:
+                console.print("[green]✓ Connected![/]")
             return ok
 
     def send_text(self, text):
-        self.cfg = load()
-        pw = self.cfg.get("pair_password","")
-        nm = self.cfg.get("display_name","")
+        pw = self._pw
+        nm = self._nm
         if pw and self.cfg["mode"] != "lan":
             inner = json.dumps({"type":"text","data":text,"sender":nm})
             self.tp.send(pk({"type":"text","data":enc(pw,inner)}))
@@ -482,9 +634,8 @@ class Chat:
         if not t.strip():
             console.print("[yellow]clipboard empty[/]")
             return
-        self.cfg = load()
-        pw = self.cfg.get("pair_password","")
-        nm = self.cfg.get("display_name","")
+        pw = self._pw
+        nm = self._nm
         if pw and self.cfg["mode"] != "lan":
             inner = json.dumps({"type":"clip","data":t,"sender":nm})
             self.tp.send(pk({"type":"clip","data":enc(pw,inner)}))
@@ -498,9 +649,8 @@ class Chat:
             console.print(f"[red]not found: {p}[/]"); return
         nm, sz = p.name, p.stat().st_size
         fid = uid()
-        self.cfg = load()
-        pw = self.cfg.get("pair_password","")
-        snd = self.cfg.get("display_name","")
+        pw = self._pw
+        snd = self._nm
 
         if pw and self.cfg["mode"] != "lan":
             inner = json.dumps({"type":"file_meta","data":{"name":nm,"size":sz,"file_id":fid},"sender":snd})
