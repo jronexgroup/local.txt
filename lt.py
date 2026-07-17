@@ -294,8 +294,12 @@ def get_ips():
 class P2P:
     """UDP-based P2P with STUN hole punching. Works behind NAT, no port forwarding needed."""
 
-    STUN_HOST = "stun.l.google.com"
-    STUN_PORT = 19302
+    STUN_SERVERS = [
+        ("stun.l.google.com", 19302),
+        ("stun2.l.google.com", 19302),
+        ("stun.stunprotocol.org", 3478),
+        ("stun.voipbuster.com", 3478),
+    ]
 
     def __init__(self, password, port):
         self.password = password
@@ -314,41 +318,41 @@ class P2P:
     # ── STUN (on main socket so port matches) ─────────────────────
 
     def _get_public(self):
-        """Get public IP:port using the already-bound main socket."""
+        """Try multiple STUN servers to find public IP:port."""
         if not self.sock: return
         old_to = self.sock.gettimeout()
+        magic = 0x2112A442
         try:
-            self.sock.settimeout(4)
-            tid = os.urandom(12)
-            magic = 0x2112A442
-            req = struct.pack("!HH", 0x0001, 0) + struct.pack("!I", magic) + tid
-            self.sock.sendto(req, (self.STUN_HOST, self.STUN_PORT))
-            res, _ = self.sock.recvfrom(1024)
-            if len(res) < 20: return
-            if struct.unpack("!I", res[4:8])[0] != magic: return
-            pos = 20
-            while pos + 4 <= len(res):
-                atype, alen = struct.unpack("!HH", res[pos:pos+4])
-                pos += 4
+            for host, sport in self.STUN_SERVERS:
                 try:
-                    if atype == 0x0020 and alen >= 8:
-                        family = res[pos+1]
-                        pval = struct.unpack("!H", res[pos+2:pos+4])[0] ^ (magic >> 16)
-                        if family == 0x01:
-                            ipb = bytes(a ^ b for a, b in zip(res[pos+4:pos+8], struct.pack("!I", magic)))
-                            self.public_ip = socket.inet_ntoa(ipb)
-                            self.public_port = pval
-                            return
-                    elif atype == 0x0001 and alen >= 8:
-                        family = res[pos+1]
-                        pval = struct.unpack("!H", res[pos+2:pos+4])[0]
-                        if family == 0x01:
-                            self.public_ip = socket.inet_ntoa(res[pos+4:pos+8])
-                            self.public_port = pval
-                            return
-                finally:
-                    pos += alen
-        except: pass
+                    self.sock.settimeout(3)
+                    tid = os.urandom(12)
+                    req = struct.pack("!HH", 0x0001, 0) + struct.pack("!I", magic) + tid
+                    self.sock.sendto(req, (host, sport))
+                    res, _ = self.sock.recvfrom(1024)
+                    if len(res) < 20 or struct.unpack("!I", res[4:8])[0] != magic:
+                        continue
+                    pos = 20
+                    while pos + 4 <= len(res):
+                        atype, alen = struct.unpack("!HH", res[pos:pos+4])
+                        pos += 4
+                        if atype == 0x0020 and alen >= 8:
+                            family = res[pos+1]
+                            pval = struct.unpack("!H", res[pos+2:pos+4])[0] ^ (magic >> 16)
+                            if family == 0x01:
+                                ipb = bytes(a ^ b for a, b in zip(res[pos+4:pos+8], struct.pack("!I", magic)))
+                                self.public_ip = socket.inet_ntoa(ipb)
+                                self.public_port = pval
+                                return
+                        elif atype == 0x0001 and alen >= 8:
+                            family = res[pos+1]
+                            pval = struct.unpack("!H", res[pos+2:pos+4])[0]
+                            if family == 0x01:
+                                self.public_ip = socket.inet_ntoa(res[pos+4:pos+8])
+                                self.public_port = pval
+                                return
+                        pos += alen
+                except: pass
         finally:
             try: self.sock.settimeout(old_to if old_to is not None else 3)
             except: pass
@@ -680,11 +684,23 @@ class Chat:
             return ok
         else:
             ips = get_ips()
-            console.print(f"\n  Tell your friend this address:")
-            stun_ip = self.tp.public_ip or ips[0] if ips else "?"
-            stun_port = self.tp.public_port or port
-            console.print(f"  [bold yellow]{stun_ip}:{stun_port}[/]")
-            console.print(f"  (local: [dim]{ips[0] if ips else '?'}:{port}[/])")
+            stun_ip = self.tp.public_ip
+            stun_port = self.tp.public_port
+
+            if stun_ip:
+                console.print(f"\n  Tell your friend: [bold yellow]{stun_ip}:{stun_port}[/]")
+                if ips:
+                    console.print(f"  (local: [dim]{ips[0]}:{port}[/])")
+            else:
+                console.print(f"\n  [red]Could not detect your public IP.[/]")
+                console.print(f"  Your local address: [bold]{ips[0] if ips else '?'}:{port}[/]")
+                manual = console.input("  Enter your public IP manually (or press Enter to use local): ").strip()
+                if manual:
+                    stun_ip = manual
+                    stun_port = port
+                else:
+                    stun_ip = ips[0] if ips else "?"
+
             console.print(f"\n  [yellow]Waiting for friend to connect...[/]")
             ok = self.tp.create()
             if ok:
