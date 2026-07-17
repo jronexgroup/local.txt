@@ -311,45 +311,47 @@ class P2P:
         self._acks = {}
         self._lock = threading.Lock()
 
-    # ── Minimal STUN (stdlib only) ─────────────────────────────
+    # ── STUN (on main socket so port matches) ─────────────────────
 
-    @staticmethod
-    def _stun_lookup(host=STUN_HOST, port=STUN_PORT, timeout=4):
+    def _get_public(self):
+        """Get public IP:port using the already-bound main socket."""
+        if not self.sock: return
+        old_to = self.sock.gettimeout()
         try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.settimeout(timeout)
+            self.sock.settimeout(4)
             tid = os.urandom(12)
             magic = 0x2112A442
             req = struct.pack("!HH", 0x0001, 0) + struct.pack("!I", magic) + tid
-            s.sendto(req, (host, port))
-            res, _ = s.recvfrom(1024)
-            s.close()
-            if len(res) < 20: return None
-            cookie = struct.unpack("!I", res[4:8])[0]
-            if cookie != magic: return None
+            self.sock.sendto(req, (self.STUN_HOST, self.STUN_PORT))
+            res, _ = self.sock.recvfrom(1024)
+            if len(res) < 20: return
+            if struct.unpack("!I", res[4:8])[0] != magic: return
             pos = 20
             while pos + 4 <= len(res):
                 atype, alen = struct.unpack("!HH", res[pos:pos+4])
                 pos += 4
-                if atype == 0x0020 and alen >= 8:  # XOR-MAPPED-ADDRESS
-                    family = res[pos+1]
-                    pval = struct.unpack("!H", res[pos+2:pos+4])[0] ^ (magic >> 16)
-                    if family == 0x01:
-                        ipb = bytes(a ^ b for a, b in zip(res[pos+4:pos+8], struct.pack("!I", magic)))
-                        return socket.inet_ntoa(ipb), pval
-                elif atype == 0x0001 and alen >= 8:  # MAPPED-ADDRESS
-                    family = res[pos+1]
-                    pval = struct.unpack("!H", res[pos+2:pos+4])[0]
-                    if family == 0x01:
-                        return socket.inet_ntoa(res[pos+4:pos+8]), pval
-                pos += alen
+                try:
+                    if atype == 0x0020 and alen >= 8:
+                        family = res[pos+1]
+                        pval = struct.unpack("!H", res[pos+2:pos+4])[0] ^ (magic >> 16)
+                        if family == 0x01:
+                            ipb = bytes(a ^ b for a, b in zip(res[pos+4:pos+8], struct.pack("!I", magic)))
+                            self.public_ip = socket.inet_ntoa(ipb)
+                            self.public_port = pval
+                            return
+                    elif atype == 0x0001 and alen >= 8:
+                        family = res[pos+1]
+                        pval = struct.unpack("!H", res[pos+2:pos+4])[0]
+                        if family == 0x01:
+                            self.public_ip = socket.inet_ntoa(res[pos+4:pos+8])
+                            self.public_port = pval
+                            return
+                finally:
+                    pos += alen
         except: pass
-        return None
-
-    def _get_public(self):
-        r = self._stun_lookup(self.STUN_HOST, self.STUN_PORT)
-        if r:
-            self.public_ip, self.public_port = r
+        finally:
+            try: self.sock.settimeout(old_to if old_to is not None else 3)
+            except: pass
 
     def _local_ip(self):
         try:
