@@ -311,6 +311,7 @@ class P2P:
         self.peer_addr = None
         self.public_ip = None
         self.public_port = None
+        self._stun_done = False
         self._seq = 0
         self._acks = {}
         self._lock = threading.Lock()
@@ -319,7 +320,7 @@ class P2P:
 
     def _get_public(self):
         """Try multiple STUN servers to find public IP:port."""
-        if not self.sock: return
+        if not self.sock or self._stun_done: return
         old_to = self.sock.gettimeout()
         magic = 0x2112A442
         try:
@@ -354,6 +355,7 @@ class P2P:
                         pos += alen
                 except: pass
         finally:
+            self._stun_done = True
             try: self.sock.settimeout(old_to if old_to is not None else 3)
             except: pass
 
@@ -367,6 +369,7 @@ class P2P:
     # ── Socket ───────────────────────────────────────────────────
 
     def _make_sock(self):
+        if self.sock: return
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.sock.bind(("0.0.0.0", self.port))
@@ -378,9 +381,6 @@ class P2P:
     def create(self):
         self._make_sock()
         self._get_public()
-        pub = f"{self.public_ip}:{self.public_port}" if self.public_ip else "?"
-        loc = self._local_ip()
-        if self.on_st: self.on_st(f"Your public: {pub}  (local: {loc}:{self.port})")
         self.running = True
 
         while self.running and not self.peer_addr:
@@ -403,8 +403,6 @@ class P2P:
         self._make_sock()
         self._get_public()
         self.peer_addr = (host, int(port))
-        pub = f"{self.public_ip}:{self.public_port}" if self.public_ip else "?"
-        if self.on_st: self.on_st(f"Your public: {pub}")
         self.running = True
 
         for _ in range(5):
@@ -683,6 +681,10 @@ class Chat:
                 save_friend(nm, host, int(p), "p2p")
             return ok
         else:
+            # Bind socket and query STUN before asking for manual IP
+            self.tp._make_sock()
+            self.tp._get_public()
+
             ips = get_ips()
             stun_ip = self.tp.public_ip
             stun_port = self.tp.public_port
@@ -695,11 +697,8 @@ class Chat:
                 console.print(f"\n  [red]Could not detect your public IP.[/]")
                 console.print(f"  Your local address: [bold]{ips[0] if ips else '?'}:{port}[/]")
                 manual = console.input("  Enter your public IP manually (or press Enter to use local): ").strip()
-                if manual:
-                    stun_ip = manual
-                    stun_port = port
-                else:
-                    stun_ip = ips[0] if ips else "?"
+                stun_ip = manual if manual else (ips[0] if ips else "?")
+                stun_port = port
 
             console.print(f"\n  [yellow]Waiting for friend to connect...[/]")
             ok = self.tp.create()
