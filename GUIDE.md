@@ -1,158 +1,279 @@
 # LT — Local Text Guide
 
-## What is LT?
-
-LT lets you chat between two devices on the same WiFi/LAN network. No internet required. No server needed. Just two devices and one command.
+**Chat with friends over LAN or Internet.** No server needed. No accounts. Just you and your friend.
 
 ---
 
-## Quick Start (Phase 1)
-
-### 1. Install
+## Quick Start
 
 ```bash
-pip3 install prompt_toolkit rich
-chmod +x lt.py
-ln -s $(pwd)/lt.py ~/.local/bin/lt
+pip3 install textual pystun3 stem pyperclip --break-system-packages
+lt --setup    # First time — follow the wizard
+lt            # Connect and chat
 ```
 
-Make sure `~/.local/bin` is in your PATH. Run this if not:
+---
 
-```bash
-echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-source ~/.bashrc
-```
+## Ways to Connect
 
-### 2. Setup (both devices)
+| Mode | Works | Speed | Setup |
+|------|-------|-------|-------|
+| **LAN** | Same WiFi | 🔥 Fast | Enter friend's IP |
+| **P2P** | Anywhere on Internet | ⚡ Fast | Share a password |
+| **Tor** | Anywhere, behind any firewall | 🐢 Slower | Install Tor + password |
 
-```bash
-lt --setup
-```
+---
 
-It will ask:
+## First Run (Onboarding)
 
-```
-Peer IP: 192.168.1.105   ← enter the other device's IP
-Port (Enter for 5050):     ← press Enter for default
-```
+When you run `lt` for the first time, you'll see the setup wizard:
 
-Do this on **both** devices — each one enters the other's IP.
+1. **Choose mode** — LAN, P2P, or Tor
+2. **Enter display name** — How you appear to your friend
+3. **Enter details** — IP for LAN, password for P2P/Tor
 
-> **How to find your IP:**
-> - Linux/macOS: run `ip addr` or `ifconfig`
-> - Windows: run `ipconfig`
-> - Look for something like `192.168.x.x`
+After setup, just run `lt` to connect.
 
-### 3. Connect
+---
 
-```bash
-lt
-```
-
-Run this on **both** devices. Within a few seconds you'll see:
+## The Chat Screen (TUI)
 
 ```
-Connected! Type /help for commands, /exit to quit
-
-You:
+┌──────────────────────────────────────────────────────────┐
+│  LT — Local Text                         ⭘      07:15   │
+├──────────────────────────────────────────────────────────┤
+│ ┌────────────────────────────────────────────────────────┐ │
+│ │ 14:00 Kali: Hey! This UI is sick!                     │ │
+│ │ 14:01 You: Right? P2P is so fast                      │ │
+│ │ 📁 Kali sent: photo.jpg (2.4 MB)                      │ │
+│ │                                                        │ │
+│ │                                                        │ │
+│ ├────────────────────────────────────────────────────────┤ │
+│ │ Type message...                          [Send] [📎]  │ │
+├──────────────────────────────────────────────────────────┤ │
+│ Mode: P2P | Ctrl+Q:Quit /cmd Ctrl+F:File Ctrl+S:Settings │
+└──────────────────────────────────────────────────────────┘
 ```
 
-Start typing. Messages appear instantly on both sides.
+### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Ctrl+Q` | Quit |
+| `Ctrl+F` | Send file |
+| `Ctrl+V` | Send clipboard |
+| `Ctrl+S` | Open settings |
+| `Ctrl+L` | Clear chat |
+| `Ctrl+N` | Connect to new peer |
+| `/cmd` | Type any command below |
 
 ---
 
 ## Commands
 
+Type any of these in the chat input and press Enter:
+
 | Command | What it does |
 |---------|-------------|
-| `/exit` | Leave the chat |
-| `/clear` | Clear the screen |
-| `/ping` | Check if connected |
+| `/exit` | Quit the chat |
+| `/clear` | Clear screen |
+| `/ping` | Check connection |
 | `/time` | Show current time |
+| `/clip` | Send your clipboard to friend |
+| `/file photo.jpg` | Send a file |
+| `/setting` | Open settings panel |
+| `/connect` | Connect to a new peer |
 | `/help` | Show all commands |
 
 ---
 
-## What it looks like
+## File Transfer
 
 ```
-Connecting to 192.168.1.105:5050...
-Connected! Type /help for commands, /exit to quit
+You:                    Friend:
+  /file photo.jpg         📁 Incoming file:
+                          Kali wants to send:
+                          photo.jpg (2.4 MB)
 
-Peer (14:00): Hi there!
-You (14:01): Hey! How's it going?
-Peer (14:01): All good, testing LT!
+                          [Accept]  [Reject]
 
-You: █
+  [████████░░] 55%        → Accepted
+  1.2 MB/s                [████████████████] 100%
+                          ✓ Saved to ~/Downloads/LT/
+```
+
+- Files are sent in chunks with progress bar
+- Saved to `~/Downloads/LT/` by default
+- Change download folder in Settings
+
+## Clipboard
+
+```
+You type /clip:
+  → Your clipboard content is sent to friend
+  → Friend sees: 📋 Kali sent clipboard
+  → Auto-copied to their clipboard
+  → Friend presses Ctrl+V anywhere
 ```
 
 ---
 
-## How it works (simple explanation)
+## Offline Messages
 
-1. When you run `lt`, it tries two things at once:
-   - Connect to your peer's IP
-   - Listen for your peer to connect to you
-2. Whichever happens first wins — you're connected
-3. Messages are sent as JSON over TCP
-4. If WiFi drops, it automatically tries to reconnect
+If your friend is offline when you send a message:
+
+```
+📨 Pending (2 messages)
+  → Saved for later delivery
+```
+
+When friend reconnects:
+
+```
+✅ Kali-PC connected
+📨 Delivering 2 pending messages... [████████████████] 100%
+─── 2 messages delivered ───
+You (14:00): Hey! How are you?
+You (14:01): sent photo.jpg (2.4 MB)
+```
 
 ---
 
-## Configuration
+## Settings (Ctrl+S or /setting)
 
-File: `~/.config/lt/config.json`
-
-```json
-{
-  "peer_ip": "192.168.1.105",
-  "port": 5050
-}
+```
+╭─ Settings ─────────────────────────────────────────────╮
+│                                                        │
+│  Display Name:    [Kali                      ]         │
+│  Theme:           ● Dark  ○ Light                     │
+│  Show Timestamps: [✓]                                   │
+│  Auto-Reconnect:  [✓]                                   │
+│  Auto-Accept Files: [ ]                                 │
+│  Download Dir:    [~/Downloads/LT          ]           │
+│                                                        │
+│  [Save]  [Reset]  [Cancel]                              │
+╰────────────────────────────────────────────────────────╯
 ```
 
-You can edit this file directly instead of running `--setup`.
+---
+
+## P2P Mode (Internet — Direct)
+
+**Fastest way to chat over Internet.** Uses STUN to discover your public IP and UDP hole punching for a direct connection.
+
+```
+lt --setup          → Choose P2P → enter password
+lt --p2p            → Connect
+
+Your public address: 203.0.113.5:54321
+Share this with your friend.
+
+Enter friend's address: 203.0.113.10:54321
+→ Connected! 🔒 Encrypted
+```
+
+### Why P2P is fast
+
+```
+P2P:     You ────────────────────────── Friend    1 hop → 10-50ms
+Tor:     You ─► Guard ─► Middle ─► Exit ─► Friend  3 hops → 200ms-2s
+```
+
+---
+
+## Tor Mode (Internet — Any Firewall)
+
+**Works everywhere.** Even behind strict firewalls or corporate networks. Requires Tor installed.
+
+```bash
+sudo apt install tor       # Install Tor
+lt --setup                 → Choose Tor → enter password
+lt --tor                   → Connect
+
+Your .onion: abcdef123456.onion:5050
+Share this with your friend.
+```
+
+---
+
+## LAN Mode (Same WiFi)
+
+No setup needed after the first time.
+
+```bash
+lt --setup  → Choose LAN → enter friend's IP
+lt          → Connect
+```
+
+Both devices must be on the same network.
+
+---
+
+## Encryption
+
+All messages are **encrypted end-to-end** with AES-256-GCM.
+
+- Your pairing password is used to derive the encryption key
+- Messages are encrypted before sending
+- The Tor/relay/peer cannot read your messages
+- 🔒 Lock icon shows encryption is active
+
+---
+
+## File Structure
+
+```
+~/.local/bin/lt              → Command (symlink)
+~/.config/lt/settings.json   → Your settings
+~/.config/lt/offline/        → Pending messages
+~/Downloads/LT/              → Received files
+```
 
 ---
 
 ## Troubleshooting
 
-**"Not configured. Run: lt --setup"**
-→ Run `lt --setup` first to enter the peer's IP.
+**App doesn't start**
+```bash
+pip3 install textual pystun3 stem pyperclip --break-system-packages
+```
 
-**Can't connect**
-- Make sure both devices are on the **same WiFi/LAN network**
-- Check that both have the **correct IP** in their config
-- Disable firewalls or allow port 5050 (TCP)
-- Try running `lt` on both devices at the same time
+**Can't connect over P2P**
+- Make sure both have the same pairing password
+- Check that STUN server is accessible (default: `stun.l.google.com:19302`)
+- Some NAT types (Symmetric) don't support hole punching → try Tor mode
 
-**"Port already in use"**
-→ Another program is using port 5050. Use `--setup` to pick a different port (e.g. `6060`).
+**Can't connect over Tor**
+- Run `sudo apt install tor` and make sure Tor is running
+- Check Tor SOCKS port (default: 9050)
+- Check Tor Control port (default: 9051)
+
+**Can't connect over LAN**
+- Both devices must be on the same WiFi/LAN
+- Check that you entered the correct IP
+- Try disabling firewall or allowing port 5050
 
 **Messages not showing**
-→ The connection might be lost. Wait for auto-reconnect or run `lt` again.
+- Wait for auto-reconnect
+- Type `/ping` to check connection
+- Run `lt` again
 
 ---
 
-## Phase 2 — Coming
+## Coming in Future
 
-- **Auto Discovery** — No need to enter IP. LT finds devices automatically.
-- **Clipboard** — `/clip` to share clipboard
-- **File Transfer** — `/send filename` to share files
-
-## Phase 3 — Coming
-
-- **Encryption** — AES-256 for secure chat
-- **Password Pairing** — Pair with a code
-- **Multiple Devices** — `lt list`, `lt all`
-
-## Something special — `lt --daemon`
-
-A future feature where LT runs in the background. When you type `lt`, the chat opens instantly — no waiting to connect.
-
----
-
-## File Location
-
-- Script: `/root/projects/localit/lt.py`
-- Config: `~/.config/lt/config.json`
-- Command: `lt` (symlink to the script)
+| Feature | Status |
+|---------|--------|
+| ~~Phase 1 (LAN Chat)~~ | ✅ Done |
+| ~~TUI (Graphical Terminal)~~ | ✅ Done |
+| ~~P2P over Internet~~ | ✅ Done |
+| ~~Tor Mode~~ | ✅ Done |
+| ~~File Transfer~~ | ✅ Done |
+| ~~Clipboard Share~~ | ✅ Done |
+| ~~Offline Messages~~ | ✅ Done |
+| ~~Settings Panel~~ | ✅ Done |
+| Auto Discovery (no IP needed) | 🔜 Coming |
+| Multiple Devices | 🔜 Coming |
+| Broadcast Message | 🔜 Coming |
+| Notification Sound | 🔜 Coming |
+| Drag & Drop Files | 🔜 Coming |
