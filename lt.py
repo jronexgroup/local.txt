@@ -12,9 +12,7 @@ import base64
 import json
 import os
 import platform
-import random
 import socket
-import string
 import struct
 import subprocess
 import sys
@@ -25,7 +23,6 @@ from pathlib import Path
 
 try:
     from prompt_toolkit import PromptSession
-    from prompt_toolkit import print_formatted_text as pt_print
     from prompt_toolkit.completion import WordCompleter
     from rich.console import Console
     from rich.progress import Progress, BarColumn, TextColumn
@@ -49,7 +46,6 @@ except ImportError:
 
 CONFIG_DIR = Path.home() / ".config" / "lt"
 CONFIG_FILE = CONFIG_DIR / "settings.json"
-OFFLINE_DIR = CONFIG_DIR / "offline"
 
 console = Console()
 CMD_COMPLETER = WordCompleter(["/exit", "/clear", "/ping", "/time", "/clip", "/file", "/help", "/setting"])
@@ -131,10 +127,6 @@ def up(line):
         return json.loads(line.strip())
     except Exception:
         return None
-
-
-def code6():
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
 
 
 # ─── Setup ────────────────────────────────────────────────────────
@@ -833,25 +825,17 @@ def menu():
     cfg = load()
     console.print("\n[bold]== Settings ==[/]")
     console.print(f"1. Name: {cfg.get('display_name','')}")
-    console.print(f"2. Mode: {cfg['mode'].upper()}")
-    console.print(f"3. Port: {cfg.get('port',5050)}")
-    console.print(f"4. Password: {'****' if cfg.get('pair_password') else '(empty)'}")
-    console.print(f"5. Download: {cfg.get('download_dir','')}")
+    console.print(f"2. Port: {cfg.get('port',5050)}")
+    console.print(f"3. Download: {cfg.get('download_dir','')}")
     console.print("0. Done")
     ch = console.input("Edit #: ").strip()
     if ch == "1":
         n = console.input("Name: ").strip()
         if n: save(display_name=n)
     elif ch == "2":
-        m = console.input("Mode (lan/p2p): ").strip().lower()
-        if m in ("lan","p2p"): save(mode=m)
-    elif ch == "3":
         p = console.input("Port: ").strip()
         if p.isdigit(): save(port=int(p))
-    elif ch == "4":
-        pw = console.input("Password: ", password=True).strip()
-        save(pair_password=pw)
-    elif ch == "5":
+    elif ch == "3":
         d = console.input("Download dir: ").strip()
         if d: save(download_dir=d)
 

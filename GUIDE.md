@@ -1,80 +1,39 @@
-# LT — Local Text Guide
-
-**Chat with friends over LAN or Internet.** No server needed.
-
-```
-lt --setup     Configure (works any time)
-lt             Connect and chat
-lt --lan       Force LAN mode
-lt --p2p       Force P2P mode
-lt --help      Show help
-```
-
----
+# LT — Guide
 
 ## Install
 
 ```bash
-# One command:
 bash setup.sh
+```
 
-# Or manually:
+Or manually:
+
+```bash
 pip3 install rich prompt_toolkit cryptography --break-system-packages
 pip3 install pyperclip --break-system-packages   # optional (clipboard)
 chmod +x lt.py
-ln -s $(pwd)/lt.py ~/.local/bin/lt
+ln -s "$(pwd)/lt.py" ~/.local/bin/lt
 ```
 
----
-
-## Setup
+## Setup (first time)
 
 ```bash
 lt --setup
 ```
 
-Follow the wizard. When done, just run `lt`.
+Enter your display name. That's all.
 
----
-
-## LAN Mode (Same WiFi)
-
-```
-lt --setup     → Choose LAN → enter friend's IP
-lt             → Connect
-```
-
-Both must be on the same network. One side connects, the other listens.
-
----
-
-## P2P Mode (Internet)
-
-### Create (Friend waits for you)
+## Chat
 
 ```bash
-lt --setup     → Choose P2P → set password
-lt
-  → Choose: 1. Create  2. Join
-  → Pick: 1
-  → Shows: Your session code: X7K3F9
-  → Share code + your IP:Port with friend
-  → Waiting for connection...
+lt              # choose mode interactively
+lt --lan        # force LAN mode
+lt --p2p        # force P2P mode
 ```
 
-### Join (Connect to friend)
+Type your message and press Enter to send.
 
-```bash
-lt
-  → Choose: 2. Join
-  → Enter friend's IP: 203.0.113.5
-  → Enter port: 5050
-  → Connected!
-```
-
----
-
-## Commands
+### Commands
 
 | Command | What it does |
 |---------|-------------|
@@ -87,52 +46,88 @@ lt
 | `/setting` | Settings menu |
 | `/help` | Show all commands |
 
----
+Type `/` to see command suggestions.
 
-## What You See
+### Friends
 
+When you connect to someone, they're saved to your friends list (last 10). Next time you run `lt`, select them for auto-connect.
+
+## LAN Mode
+
+Both devices on the same WiFi/network.
+
+```bash
+lt --lan
+# Choose 1 (Create) or 2 (Connect)
 ```
-== LT ==
-✓ Connected
---- Connected ---
- Kali (14:00): Hey! What's up?
- TestPC (14:01): Nothing much!
 
-> █
+- **Create** → Shows your IP, waits for incoming connection
+- **Connect** → Enter friend's IP, connects to them
+
+## P2P Mode
+
+Devices on different networks.
+
+```bash
+lt --p2p
+# Choose 1 (Create) or 2 (Join)
 ```
 
-- Green = Peer messages
-- Blue = Your messages  
-- ✓ Connected / ✗ Disconnected / ⟳ Reconnecting...
+- **Create** → Shows your public IP:Port (via STUN). Share this with your friend.
+- **Join** → Enter friend's IP:Port
 
----
+Both sides must enter the same password. Messages are encrypted with AES-256-GCM.
+
+### If STUN fails
+
+If your public IP can't be detected, LT shows your local address and asks you to enter your public IP manually. You can find it by visiting [whatismyip.com](https://whatismyip.com).
 
 ## File Transfer
 
-```
-> /file photo.jpg
-  sending: photo.jpg (2.4 MB)
-  [████████████░░] 60%
-  sent: photo.jpg
+```bash
+/file photo.jpg
 ```
 
-Receiver:
-```
-  Incoming: photo.jpg (2.4 MB)
-  Accept? (y/n): y
-  received: photo.jpg -> ~/Downloads/LT/photo.jpg
-```
-
----
+Sender sees a progress bar. Receiver is prompted to accept. Files land in `~/Downloads/LT/`.
 
 ## Clipboard
 
-```
-> /clip
-  clip sent (245 chars)
+```bash
+/clip
 ```
 
----
+Sends your current clipboard contents to the peer. Their clipboard is updated automatically (requires `pyperclip`).
+
+## Encryption
+
+P2P mode encrypts all messages with AES-256-GCM. The key is derived from your shared password using PBKDF2 (100,000 iterations).
+
+LAN mode sends unencrypted (it's your local network).
+
+## Settings
+
+```bash
+/setting
+```
+
+Change your display name, port, or download directory.
+
+## Troubleshooting
+
+**Connection fails in P2P mode:**
+- Make sure both sides entered the same password
+- Try swapping Create/Join roles (the machine with STUN working should Create)
+- Some restrictive NATs (symmetric NAT) block hole punching — try LAN mode instead
+
+**Connection fails in LAN mode:**
+- Make sure both devices are on the same network
+- Check the IP address is correct (`ip addr` on Linux, `ipconfig` on Windows)
+- Check firewall settings (port 5050)
+
+**STUN fails:**
+- Try again (network may be temporary)
+- Visit whatismyip.com and enter your public IP manually
+- Some networks block STUN — use P2P on a different network or use LAN mode
 
 ## Files
 
@@ -141,4 +136,5 @@ Receiver:
 | `lt.py` | Main script |
 | `setup.sh` | Installer |
 | `~/.config/lt/settings.json` | Config |
+| `~/.config/lt/friends.json` | Friends list |
 | `~/Downloads/LT/` | Received files |
